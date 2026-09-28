@@ -1,0 +1,601 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from PIL import Image
+import os
+from scipy.special import erf
+from scipy.ndimage import gaussian_filter
+from skimage.filters import threshold_otsu
+from skimage.measure import find_contours
+
+# ==============================================================================
+# 1. PAGE CONFIGURATION & MODERN GLASSMORPHISM THEME
+# ==============================================================================
+logo_path = "logo.png"
+
+st.set_page_config(
+    page_title="Materials Intelligence Engine | Muhammad Mudassar",
+    page_icon=logo_path if os.path.exists(logo_path) else "🔬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom Glassmorphism UI Styling
+st.markdown("""
+<style>
+    .main { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+    .stMetric { background: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); }
+    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; background: linear-gradient(90deg, #2563eb, #3b82f6); color: white; }
+    .history-card { background: rgba(255, 255, 255, 0.03); padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 3px solid #3b82f6; }
+</style>
+""", unsafe_allow_html=True)
+
+# Session State Persistence Initialization
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "username" not in st.session_state:
+    st.session_state["username"] = ""
+if "history" not in st.session_state:
+    st.session_state["history"] = []
+
+def log_history(activity_type, details):
+    st.session_state["history"].append({
+        "Type": activity_type,
+        "Details": details,
+        "Module": st.session_state.get("current_module", "General")
+    })
+
+# ==============================================================================
+# 2. USER AUTHENTICATION SYSTEM (LOGIN / REGISTER)
+# ==============================================================================
+if not st.session_state["authenticated"]:
+    st.markdown("<h1 style='text-align: center;'>🔬 Materials Intelligence Engine</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center;'>Engineered by <b>Muhammad Mudassar</b></p>", unsafe_allow_html=True)
+    
+    col_login1, col_login2, col_login3 = st.columns([1, 1.5, 1])
+    with col_login2:
+        if os.path.exists(logo_path):
+            st.image(logo_path, use_container_width=True)
+            
+        st.subheader("🔑 Engineer Portal Login")
+        auth_mode = st.radio("Select Action:", ["Login", "Register New Account"], horizontal=True)
+        user_input = st.text_input("Engineer Username / ID:")
+        pass_input = st.text_input("Password:", type="password")
+        
+        if st.button("Access Dashboard"):
+            if user_input.strip() != "":
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = user_input
+                log_history("User Session", f"Logged in as {user_input}")
+                st.rerun()
+            else:
+                st.error("Please enter a valid Username / ID.")
+    st.stop()
+
+# ==============================================================================
+# 3. SIDEBAR BRANDING & SEARCH HISTORY TRACKER
+# ==============================================================================
+if os.path.exists(logo_path):
+    st.sidebar.image(logo_path, use_container_width=True)
+
+st.sidebar.title("Materials Intelligence")
+st.sidebar.caption("Engineered by **Muhammad Mudassar**")
+st.sidebar.markdown(f"👤 **Active User**: `{st.session_state['username']}`")
+
+if st.sidebar.button("Logout"):
+    st.session_state["authenticated"] = False
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+CHOICE_M1 = "🔬 Module 1: Microstructure Analysis & Heat Treatment"
+CHOICE_M2 = "🧮 Module 2: Materials Engineering & Kinetics Calculator"
+CHOICE_M3 = "🧊 Module 3: Dynamic 3D Crystal Lattice & Slip Engine"
+
+module_choice = st.sidebar.radio(
+    "Select Engineering Module:",
+    [CHOICE_M1, CHOICE_M2, CHOICE_M3]
+)
+st.session_state["current_module"] = module_choice
+
+# Search & Calculation History Log Viewer
+st.sidebar.markdown("---")
+with st.sidebar.expander("📜 Search & Calculation History"):
+    if len(st.session_state["history"]) == 0:
+        st.write("No session calculations recorded yet.")
+    else:
+        for idx, item in enumerate(reversed(st.session_state["history"])):
+            st.markdown(f"""
+            <div class="history-card">
+                <small><b>{item['Type']}</b> ({item['Module']})</small><br>
+                <span>{item['Details']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+# Main App Title Header
+st.title("🔬 Materials Intelligence Engine")
+st.caption("Developed by **Muhammad Mudassar** | Advanced Metallurgy & Materials Design Platform")
+st.divider()
+
+# ==============================================================================
+# HELPER FUNCTIONS FOR 3D CRYSTALLOGRAPHY
+# ==============================================================================
+def get_miller_plane_mesh(h, k, l):
+    if h == 0 and k == 0 and l == 0:
+        return None
+    
+    def find_pts(c_val):
+        pts = []
+        if h != 0:
+            for y_e in [0.0, 1.0]:
+                for z_e in [0.0, 1.0]:
+                    x = (c_val - k * y_e - l * z_e) / h
+                    if 0.0 <= x <= 1.0:
+                        pts.append((x, y_e, z_e))
+        if k != 0:
+            for x_e in [0.0, 1.0]:
+                for z_e in [0.0, 1.0]:
+                    y = (c_val - h * x_e - l * z_e) / k
+                    if 0.0 <= y <= 1.0:
+                        pts.append((x_e, y, z_e))
+        if l != 0:
+            for x_e in [0.0, 1.0]:
+                for y_e in [0.0, 1.0]:
+                    z = (c_val - h * x_e - k * y_e) / l
+                    if 0.0 <= z <= 1.0:
+                        pts.append((x_e, y_e, z))
+        
+        unique = []
+        for p in pts:
+            p_round = (round(p[0], 4), round(p[1], 4), round(p[2], 4))
+            if p_round not in unique:
+                unique.append(p_round)
+        return unique
+
+    unique_pts = find_pts(1.0)
+    if len(unique_pts) < 3:
+        c_alt = (1.0 if h > 0 else 0.0) + (1.0 if k > 0 else 0.0) + (1.0 if l > 0 else 0.0)
+        c_alt = c_alt * 0.5 if c_alt > 0 else 0.5
+        unique_pts = find_pts(c_alt)
+        
+    if len(unique_pts) < 3:
+        return None
+        
+    pts = np.array(unique_pts)
+    centroid = np.mean(pts, axis=0)
+    normal = np.array([h, k, l], dtype=float)
+    norm_val = np.linalg.norm(normal)
+    if norm_val == 0:
+        return None
+    normal /= norm_val
+    
+    v1 = pts[0] - centroid
+    if np.linalg.norm(v1) < 1e-5:
+        v1 = pts[1] - centroid
+    v1 /= np.linalg.norm(v1)
+    v2 = np.cross(normal, v1)
+    
+    angles = [np.arctan2(np.dot(p - centroid, v2), np.dot(p - centroid, v1)) for p in pts]
+    pts = pts[np.argsort(angles)]
+    
+    i_list, j_list, k_list = [], [], []
+    for idx in range(1, len(pts) - 1):
+        i_list.append(0)
+        j_list.append(idx)
+        k_list.append(idx + 1)
+        
+    return pts[:, 0], pts[:, 1], pts[:, 2], i_list, j_list, k_list
+
+# ==============================================================================
+# MODULE 1: MICROSTRUCTURE ANALYSIS & HEAT TREATMENT ADVISORY
+# ==============================================================================
+if module_choice == CHOICE_M1:
+    st.header("Module 1: Automated Microstructure Characterization & Heat Treatment Advisory")
+    st.caption("Upload optical/SEM micrographs or run a sample test image for ASTM E112 grain sizing, property prediction, and JMAK kinetics.")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader("Upload Microstructure Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
+        use_sample = st.checkbox("Or use Sample Test Microstructure Image", value=True if uploaded_file is None else False)
+        microns_per_pixel = st.number_input("Microscope Scale Factor (μm / pixel):", min_value=0.01, value=0.50, step=0.05)
+        
+    img_rgb = None
+    if uploaded_file is not None:
+        pil_img = Image.open(uploaded_file).convert('RGB')
+        img_rgb = np.array(pil_img)
+        log_history("Microstructure Analysis", f"Analyzed uploaded image: {uploaded_file.name}")
+    elif use_sample:
+        sample_img = np.zeros((400, 400), dtype=np.uint8)
+        for _ in range(35):
+            cx, cy, r = np.random.randint(40, 360), np.random.randint(40, 360), np.random.randint(20, 50)
+            y_grid, x_grid = np.ogrid[:400, :400]
+            mask = (x_grid - cx)**2 + (y_grid - cy)**2 <= r**2
+            sample_img[mask] = 255
+        img_rgb = np.stack([sample_img]*3, axis=-1)
+
+    if img_rgb is not None:
+        gray = np.dot(img_rgb[...,:3], [0.2989, 0.5870, 0.1140])
+        blur = gaussian_filter(gray, sigma=1.5)
+        thresh_val = threshold_otsu(blur)
+        binary = blur < thresh_val
+        
+        contours = find_contours(binary, 0.5)
+        
+        with col1:
+            st.image(img_rgb, caption="Original Input Micrograph", use_container_width=True)
+        with col2:
+            fig_cont = px.imshow(img_rgb, title="Grain Boundary Segmentation Overlay")
+            for c in contours[::2]:
+                fig_cont.add_trace(go.Scatter(x=c[:, 1], y=c[:, 0], mode='lines', line=dict(color='lime', width=1.5), showlegend=False))
+            st.plotly_chart(fig_cont, use_container_width=True)
+            
+        grain_count = max(len(contours), 10)
+        total_img_area_mm2 = (img_rgb.shape[0] * img_rgb.shape[1] * (microns_per_pixel ** 2)) / 1e6
+        mean_area_um = (img_rgb.shape[0] * img_rgb.shape[1] * (microns_per_pixel ** 2)) / grain_count
+        mean_ecd_um = 2 * np.sqrt(mean_area_um / np.pi)
+        
+        N_A = (grain_count / total_img_area_mm2) * 0.01
+        astm_G = (np.log(max(N_A, 1.0)) / np.log(2)) + 1.0
+        
+        sigma_0, k_y = 70.0, 0.74
+        d_meters = mean_ecd_um * 1e-6
+        predicted_sigma_y = sigma_0 + (k_y / np.sqrt(d_meters)) / 1e3
+        
+        st.subheader("Quantitative Stereological Results (ASTM E112 Standard)")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Grains Counted", f"{grain_count}")
+        m2.metric("Mean Grain Diameter", f"{mean_ecd_um:.2f} μm")
+        m3.metric("ASTM Grain Size (G)", f"{astm_G:.1f}")
+        m4.metric("Predicted Yield Strength", f"{predicted_sigma_y:.1f} MPa")
+        
+        st.divider()
+        st.subheader("Microstructure Diagnosis & Heat Treatment Advisory")
+        
+        if astm_G < 5.0:
+            st.warning("⚠️ **Diagnosis**: Coarse Grain Structure detected ($G < 5$).")
+            st.markdown("""
+            * **Property Limitations**: Low impact toughness, high ductile-brittle transition temperature.
+            * **Correction Procedure (Normalizing)**: Heat component to **$880^\circ\text{C} - 920^\circ\text{C}$** and cool in still air.
+            * **Target Evolution**: Refines ASTM grain size to $G > 8$, restoring yield strength and impact energy.
+            """)
+        else:
+            st.success("✅ **Diagnosis**: Fine Grain Structure detected ($G \ge 5$).")
+            st.markdown("""
+            * **Property Strengths**: High yield strength via Hall-Petch boundary strengthening.
+            * **Optimization Procedure (Stress Relief Annealing)**: Heat to **$550^\circ\text{C} - 650^\circ\text{C}$** for $2\text{ hours}$.
+            """)
+            
+        st.subheader("JMAK Transformation Kinetics Simulation")
+        t = np.linspace(0.1, 100, 200)
+        k_param = st.slider("Kinetic Rate Constant (k):", 0.001, 0.1, 0.01, format="%.3f")
+        n_param = st.slider("Avrami Growth Exponent (n):", 1.0, 4.0, 2.5, 0.1)
+        
+        f_t = (1 - np.exp(-k_param * (t ** n_param))) * 100
+        fig_jmak = px.line(x=t, y=f_t, labels={'x': 'Time (seconds)', 'y': 'Transformed Phase Fraction (%)'},
+                           title="Isothermal Recrystallization / Phase Growth Kinetics")
+        fig_jmak.add_hline(y=50, line_dash="dash", line_color="red", annotation_text="50% Transformed")
+        st.plotly_chart(fig_jmak, use_container_width=True)
+
+# ==============================================================================
+# MODULE 2: EXHAUSTIVE ALLOY KNOWLEDGE BASE & CALCULATOR HUB
+# ==============================================================================
+elif module_choice == CHOICE_M2:
+    st.header("Module 2: Materials Engineering & Kinetics Calculator Hub")
+    st.caption("Interactive alloy property search engine, stress-strain plasticity calculator, and diffusion/Arrhenius kinetics solver.")
+    
+    alloy_dict = {
+        'AISI 1010 (Low Carbon Steel)': {
+            'type': 'Plain Carbon Steel', 'density': 7.87, 'yield': 200, 'tensile': 360, 'youngs': 200, 'elongation': 30, 'hardness': '105 HB',
+            'mechanism': 'Solid solution strengthening by Carbon & Manganese in a soft, ductile Ferrite matrix.',
+            'heat_treatment': 'Full Annealing at 890°C - 920°C, air cool for normalization, or cold work.',
+            'apps': 'Automotive body panels, deep-drawn components, structural tubing, sheet metal.'
+        },
+        'AISI 1045 (Medium Carbon Steel)': {
+            'type': 'Medium Carbon Steel', 'density': 7.85, 'yield': 370, 'tensile': 625, 'youngs': 206, 'elongation': 16, 'hardness': '180 HB',
+            'mechanism': 'Two-phase Ferrite-Pearlite mixture providing balanced strength and toughness.',
+            'heat_treatment': 'Normalize at 870°C. Water quench from 840°C and temper at 400°C - 600°C.',
+            'apps': 'Crankshafts, transmission gears, axles, bolts, machine spindles.'
+        },
+        'AISI 1095 (High Carbon Steel)': {
+            'type': 'High Carbon Steel', 'density': 7.84, 'yield': 500, 'tensile': 760, 'youngs': 208, 'elongation': 10, 'hardness': '240 HB',
+            'mechanism': 'High volume fraction of lamellar Pearlite and cementite boundary networks.',
+            'heat_treatment': 'Spheroidize anneal at 720°C. Oil quench from 800°C, low-temp temper at 200°C.',
+            'apps': 'High-strength springs, industrial blades, cutting tools, wear-resistant plates.'
+        },
+        'AISI 4140 (Chromoly Alloy Steel)': {
+            'type': 'Low-Alloy Steel', 'density': 7.85, 'yield': 750, 'tensile': 1000, 'youngs': 210, 'elongation': 19, 'hardness': '320 HB (35 HRC)',
+            'mechanism': 'Chromium-Molybdenum carbide precipitation & tempered Martensite transformation.',
+            'heat_treatment': 'Oil quench from 845°C. Temper at 540°C - 680°C for high fatigue strength.',
+            'apps': 'Oilfield drill collars, aircraft engine mounts, heavy-duty hydraulic shafts.'
+        },
+        'AISI 4340 (Ni-Cr-Mo High-Strength Steel)': {
+            'type': 'High-Strength Alloy Steel', 'density': 7.85, 'yield': 860, 'tensile': 1280, 'youngs': 210, 'elongation': 12, 'hardness': '38 HRC',
+            'mechanism': 'Deep hardenability through Nickel, Chromium, and Molybdenum additions yielding ultra-fine tempered Martensite.',
+            'heat_treatment': 'Oil quench from 830°C, double temper at 500°C for high fracture toughness.',
+            'apps': 'Aircraft landing gear, power transmission shafts, heavy military equipment.'
+        },
+        'AISI 316L (Austenitic Stainless Steel)': {
+            'type': 'Stainless Steel', 'density': 8.00, 'yield': 290, 'tensile': 580, 'youngs': 193, 'elongation': 50, 'hardness': '150 HB',
+            'mechanism': 'Stable FCC Austenite phase stabilized by Nickel; Molybdenum resists pitting corrosion.',
+            'heat_treatment': 'Solution anneal at 1040°C - 1120°C followed by rapid water quenching.',
+            'apps': 'Chemical processing hardware, marine structures, medical implants, food grade equipment.'
+        },
+        'AISI 304 (General Purpose Stainless)': {
+            'type': 'Stainless Steel', 'density': 8.00, 'yield': 215, 'tensile': 505, 'youngs': 193, 'elongation': 70, 'hardness': '130 HB',
+            'mechanism': 'Austenitic 18/8 Chromium-Nickel matrix providing superior cold formability.',
+            'heat_treatment': 'Solution treat at 1010°C - 1120°C, rapid air/water cool.',
+            'apps': 'Kitchen sinks, architectural paneling, heat exchangers, chemical tanks.'
+        },
+        'Ti-6Al-4V (Grade 5 Titanium)': {
+            'type': 'Titanium Alloy', 'density': 4.43, 'yield': 880, 'tensile': 950, 'youngs': 114, 'elongation': 14, 'hardness': '36 HRC',
+            'mechanism': 'Alpha-Beta dual phase strengthening with Aluminum as Alpha stabilizer and Vanadium as Beta stabilizer.',
+            'heat_treatment': 'Solution treat at 950°C, water quench, and age at 540°C for 4 hours.',
+            'apps': 'Aerospace airframes, jet engine turbine blades, orthopedic bone implants, racing components.'
+        },
+        'Al 6061-T6 (Precipitation Hardened Aluminum)': {
+            'type': 'Aluminum Alloy', 'density': 2.70, 'yield': 276, 'tensile': 310, 'youngs': 68.9, 'elongation': 12, 'hardness': '95 HB',
+            'mechanism': 'Precipitation hardening via coherent Mg2Si (Mg-Si needle-like precipitates).',
+            'heat_treatment': 'Solutionize at 530°C, water quench, artificial age at 160°C for 18 hours (T6 temper).',
+            'apps': 'Bicycle frames, aircraft wings, structural architectural frameworks, automotive chassis.'
+        },
+        'Al 7075-T6 (Aerospace Super-Duralumin)': {
+            'type': 'High-Strength Aluminum Alloy', 'density': 2.81, 'yield': 503, 'tensile': 572, 'youngs': 71.7, 'elongation': 11, 'hardness': '150 HB',
+            'mechanism': 'Zinc-Magnesium-Copper precipitation hardening forming fine eta (MgZn2) phases.',
+            'heat_treatment': 'Solution treat at 480°C, quench, age at 120°C for 24 hours.',
+            'apps': 'Aircraft structural spars, military hardware, high-stress aerospace fittings.'
+        },
+        'Inconel 718 (Nickel Superalloy)': {
+            'type': 'Nickel Superalloy', 'density': 8.19, 'yield': 1100, 'tensile': 1375, 'youngs': 205, 'elongation': 15, 'hardness': '40 HRC',
+            'mechanism': 'Gamma prime γ" [Ni3Nb] coherent precipitation strengthening at ultra-high temperatures.',
+            'heat_treatment': 'Solution anneal at 980°C, duplex age at 720°C for 8 hours and 620°C for 8 hours.',
+            'apps': 'Rocket propulsion engines, gas turbine disks, high-temperature nuclear reactors.'
+        },
+        'Copper C11000 (ETP Copper)': {
+            'type': 'Non-Ferrous Pure Metal', 'density': 8.89, 'yield': 69, 'tensile': 220, 'youngs': 115, 'elongation': 45, 'hardness': '40 HB',
+            'mechanism': 'High electrical conductivity pure matrix; strain hardens rapidly during cold rolling.',
+            'heat_treatment': 'Anneal at 375°C - 650°C to induce complete recrystallization.',
+            'apps': 'Electrical wiring, motor windings, busbars, printed circuit board traces.'
+        },
+        'Tool Steel D2 (Cold Work Tool Steel)': {
+            'type': 'High Chromium Tool Steel', 'density': 7.70, 'yield': 1550, 'tensile': 1750, 'youngs': 210, 'elongation': 3, 'hardness': '60 HRC',
+            'mechanism': 'High volume of extremely hard Chromium carbides (Cr7C3) dispersed in Martensite.',
+            'heat_treatment': 'Air quench from 1010°C, double temper at 200°C for maximum wear resistance.',
+            'apps': 'Stamping dies, shear blades, blanking punches, thread rolling dies.'
+        },
+        'Nitinol (55-NiTi Shape Memory Alloy)': {
+            'type': 'Smart Shape Memory Alloy', 'density': 6.45, 'yield': 195, 'tensile': 890, 'youngs': 75, 'elongation': 15, 'hardness': '280 HB',
+            'mechanism': 'Reversible thermoelastic martensitic phase transformation (Austenite B19\' <-> Martenite B2).',
+            'heat_treatment': 'Shape setting heat treatment at 500°C for 30 minutes, rapid water quench.',
+            'apps': 'Self-expanding vascular stents, orthodontic archwires, aerospace actuators.'
+        },
+        'Magnesium AZ31B (Lightweight Structural Alloy)': {
+            'type': 'Magnesium Alloy', 'density': 1.78, 'yield': 220, 'tensile': 290, 'youngs': 45, 'elongation': 15, 'hardness': '73 HB',
+            'mechanism': 'Solute strengthening by Aluminum and Zinc in an ultra-lightweight HCP Magnesium matrix.',
+            'heat_treatment': 'Stress relief anneal at 150°C - 200°C or full anneal at 345°C.',
+            'apps': '3C electronics housings, lightweight aerospace enclosures, automotive steering wheels.'
+        }
+    }
+    
+    tab_step1, tab_step2, tab_step3 = st.tabs([
+        "Step 1: Alloy Search & Deep Technical Profile",
+        "Step 2: Stress-Strain & Plasticity Calculator",
+        "Step 3: Diffusion & Kinetics Calculator (Arrhenius / Fick)"
+    ])
+    
+    with tab_step1:
+        st.subheader("🔍 Search Alloy / Metal Database")
+        selected_alloy_name = st.selectbox("Select or Type Material Name:", list(alloy_dict.keys()))
+        alloy_info = alloy_dict[selected_alloy_name]
+        log_history("Material Search", f"Fetched profile for {selected_alloy_name}")
+        
+        st.markdown(f"### Material Profile: **{selected_alloy_name}** (`{alloy_info['type']}`)")
+        
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Yield Stress (σy)", f"{alloy_info['yield']} MPa")
+        m2.metric("Tensile Stress (σu)", f"{alloy_info['tensile']} MPa")
+        m3.metric("Elongation (%)", f"{alloy_info['elongation']} %")
+        m4.metric("Young's Modulus", f"{alloy_info['youngs']} GPa")
+        m5.metric("Hardness", f"{alloy_info['hardness']}")
+        m6.metric("Density (ρ)", f"{alloy_info['density']} g/cm³")
+        
+        st.divider()
+        col_d1, col_d2, col_d3 = st.columns(3)
+        
+        with col_d1:
+            st.info("🧬 **Microstructure & Strengthening Mechanism**")
+            st.write(alloy_info['mechanism'])
+            
+        with col_d2:
+            st.warning("🔥 **Heat Treatment Procedure**")
+            st.write(alloy_info['heat_treatment'])
+            
+        with col_d3:
+            st.success("⚙️ **Industrial Applications & Uses**")
+            st.write(alloy_info['apps'])
+
+    with tab_step2:
+        st.subheader("📊 Stress-Strain, Hollomon Hardening & Plasticity Calculator")
+        st.caption("Calculate True Stress-Strain, Strain Hardening Exponent (n), and Modulus of Resilience.")
+        
+        col_c1, col_c2 = st.columns(2)
+        
+        with col_c1:
+            st.markdown("**Engineering Test Inputs:**")
+            eng_stress = st.number_input("Engineering Stress (σ_eng in MPa):", min_value=1.0, value=350.0, step=10.0)
+            eng_strain = st.number_input("Engineering Strain (ε_eng as decimal, e.g., 0.15 = 15%):", min_value=0.001, value=0.150, step=0.01)
+            youngs_m = st.number_input("Young's Modulus (E in GPa):", min_value=10.0, value=200.0, step=5.0)
+            
+            st.markdown("**Hollomon Power Law Curve Parameters ($\sigma = K \cdot \epsilon^n$):**")
+            K_strength = st.number_input("Strength Coefficient (K in MPa):", min_value=100.0, value=800.0, step=50.0)
+            n_hardening = st.slider("Strain Hardening Exponent (n):", 0.05, 0.50, 0.20, 0.01)
+
+        true_stress = eng_stress * (1 + eng_strain)
+        true_strain = np.log(1 + eng_strain)
+        resilience_Ur = ((eng_stress ** 2) / (2 * youngs_m * 1000))
+        
+        if st.button("Save Stress-Strain Calculation"):
+            log_history("Stress Calc", f"σ_true={true_stress:.1f} MPa, ε_true={true_strain:.3f}, Ur={resilience_Ur:.3f} MJ/m³")
+            st.success("Calculation logged into Session History!")
+
+        with col_c2:
+            st.markdown("**Calculated Mechanical Outputs:**")
+            st.success(f"**True Stress ($\sigma_{{true}}$)**: `{true_stress:.2f} MPa`")
+            st.success(f"**True Strain ($\epsilon_{{true}}$)**: `{true_strain:.4f}`")
+            st.info(f"**Modulus of Resilience ($U_r$)**: `{resilience_Ur:.4f} MJ/m³`")
+            
+            eps_range = np.linspace(0.001, 0.40, 200)
+            sigma_hollomon = K_strength * (eps_range ** n_hardening)
+            
+            fig_ss = px.line(x=eps_range, y=sigma_hollomon, labels={'x': 'True Strain (ε)', 'y': 'True Stress (MPa)'},
+                             title=f"Hollomon Power Law Curve: σ = {K_strength} × ε^({n_hardening})")
+            fig_ss.add_scatter(x=[true_strain], y=[true_stress], mode='markers+text',
+                               marker=dict(size=12, color='red'), text=["  Operating Point"], textposition="top right")
+            st.plotly_chart(fig_ss, use_container_width=True)
+
+    with tab_step3:
+        st.subheader("🧪 Diffusion Coefficient & Fick's Law Kinetics Solver")
+        st.caption("Calculate Diffusion Coefficients (Arrhenius) and Carburizing Case Depth (Fick's 2nd Law).")
+        
+        col_k1, col_k2 = st.columns(2)
+        
+        with col_k1:
+            st.markdown("### 1. Arrhenius Equation Solver ($D = D_0 \cdot e^{-Q / RT}$)")
+            D0 = st.number_input("Frequency Factor (D₀ in m²/s):", min_value=1e-7, value=2.3e-5, format="%.2e")
+            Q_activation = st.number_input("Activation Energy (Q in J/mol):", min_value=10000.0, value=148000.0, step=5000.0)
+            temp_C = st.number_input("Temperature (°C):", min_value=100.0, value=927.0, step=10.0)
+            
+            R_gas = 8.314
+            temp_K = temp_C + 273.15
+            D_coeff = D0 * np.exp(-Q_activation / (R_gas * temp_K))
+            st.success(f"**Calculated Diffusion Coefficient (D)**: `{D_coeff:.4e} m²/s`")
+
+        with col_k2:
+            st.markdown("### 2. Fick's 2nd Law Carburizing Depth Solver")
+            C_surface = st.number_input("Surface Carbon Conc. (C_s wt%):", min_value=0.1, value=1.20, step=0.05)
+            C_initial = st.number_input("Initial Core Carbon Conc. (C₀ wt%):", min_value=0.01, value=0.20, step=0.05)
+            carburizing_hours = st.number_input("Carburizing Time (t in Hours):", min_value=0.1, value=4.0, step=0.5)
+            
+            t_seconds = carburizing_hours * 3600
+            depth_x_mm = np.linspace(0.01, 3.0, 100)
+            depth_x_m = depth_x_mm * 1e-3
+            
+            conc_profile = C_surface - (C_surface - C_initial) * erf(depth_x_m / (2 * np.sqrt(D_coeff * t_seconds)))
+            
+            fig_diff = px.line(x=depth_x_mm, y=conc_profile, labels={'x': 'Depth below surface (x in mm)', 'y': 'Carbon Concentration (wt%)'},
+                               title=f"Carbon Diffusion Profile after {carburizing_hours} Hours at {temp_C}°C")
+            fig_diff.add_hline(y=(C_surface + C_initial)/2, line_dash="dash", line_color="orange", annotation_text="Target Depth Level")
+            st.plotly_chart(fig_diff, use_container_width=True)
+
+# ==============================================================================
+# MODULE 3: INTERACTIVE 3D CRYSTAL LATTICE, PLANES & DIRECTIONS ENGINE
+# ==============================================================================
+elif module_choice == CHOICE_M3:
+    st.header("Module 3: Dynamic 3D Crystal Lattice, Planes & Directions Engine")
+    st.caption("Interactive 3D visualization of unit cell structures, custom Miller Planes (h k l), and Miller Directions [u v w].")
+    
+    col_config1, col_config2 = st.columns([1, 1])
+    
+    with col_config1:
+        lattice_type = st.selectbox("Select Crystal Structure:", ["FCC (Face-Centered Cubic)", "BCC (Body-Centered Cubic)", "HCP (Hexagonal Close-Packed)"])
+        dislocation_shift = st.slider("Apply Shear Strain (Animate Dislocation Glide):", 0.0, 0.5, 0.0, 0.05)
+
+    st.subheader("📐 Crystallographic Planes & Directions Controls")
+    col_p, col_d = st.columns(2)
+    
+    with col_p:
+        st.markdown("**Miller Plane Indices $(h\,k\,l)$**")
+        show_plane_custom = st.checkbox("Show Custom Miller Plane", value=True)
+        cp1, cp2, cp3 = st.columns(3)
+        h_val = cp1.number_input("h index", min_value=-3, max_value=3, value=1, step=1)
+        k_val = cp2.number_input("k index", min_value=-3, max_value=3, value=1, step=1)
+        l_val = cp3.number_input("l index", min_value=-3, max_value=3, value=1, step=1)
+
+    with col_d:
+        st.markdown("**Miller Direction Indices $[u\,v\,w]$**")
+        show_dir_custom = st.checkbox("Show Custom Miller Direction Vector", value=True)
+        cd1, cd2, cd3 = st.columns(3)
+        u_val = cd1.number_input("u index", min_value=-3, max_value=3, value=1, step=1)
+        v_val = cd2.number_input("v index", min_value=-3, max_value=3, value=1, step=1)
+        w_val = cd3.number_input("w index", min_value=-3, max_value=3, value=1, step=1)
+
+    atoms = []
+    if lattice_type.startswith("FCC"):
+        for x in [0, 1]:
+            for y in [0, 1]:
+                for z in [0, 1]:
+                    atoms.append([x + (z * dislocation_shift if z == 1 else 0), y, z, 'Corner Site'])
+        faces = [[0.5, 0.5, 0], [0.5, 0.5, 1], [0.5, 0, 0.5], [0.5, 1, 0.5], [0, 0.5, 0.5], [1, 0.5, 0.5]]
+        for f in faces:
+            atoms.append([f[0] + (f[2] * dislocation_shift if f[2] == 1 else 0), f[1], f[2], 'Face-Center Site'])
+            
+    elif lattice_type.startswith("BCC"):
+        for x in [0, 1]:
+            for y in [0, 1]:
+                for z in [0, 1]:
+                    atoms.append([x + (z * dislocation_shift if z == 1 else 0), y, z, 'Corner Site'])
+        atoms.append([0.5 + 0.5 * dislocation_shift, 0.5, 0.5, 'Body-Center Site'])
+        
+    else:  # HCP
+        for z in [0, 1]:
+            atoms.append([0, 0, z, 'Hex-Center Site'])
+            for angle in np.linspace(0, 2*np.pi, 7)[:-1]:
+                atoms.append([np.cos(angle), np.sin(angle), z, 'Hex-Corner Site'])
+        atoms.append([0.33, 0.58, 0.5, 'Mid-Layer Site'])
+        atoms.append([-0.33, 0.58, 0.5, 'Mid-Layer Site'])
+        atoms.append([0, -0.58, 0.5, 'Mid-Layer Site'])
+
+    atoms_df = pd.DataFrame(atoms, columns=['X', 'Y', 'Z', 'Site'])
+    
+    fig_3d = px.scatter_3d(
+        atoms_df, x='X', y='Y', z='Z', color='Site', size_max=30,
+        title=f"3D Unit Cell Visualizer: {lattice_type}", opacity=0.9
+    )
+    fig_3d.update_traces(marker=dict(size=18, line=dict(width=2, color='DarkSlateGrey')))
+    
+    if not lattice_type.startswith("HCP"):
+        for x in [0, 1]:
+            for y in [0, 1]:
+                fig_3d.add_trace(go.Scatter3d(x=[x, x], y=[y, y], z=[0, 1], mode='lines', line=dict(color='black', width=3), showlegend=False))
+                fig_3d.add_trace(go.Scatter3d(x=[x, x], y=[0, 1], z=[y, y], mode='lines', line=dict(color='black', width=3), showlegend=False))
+                fig_3d.add_trace(go.Scatter3d(x=[0, 1], y=[x, x], z=[y, y], mode='lines', line=dict(color='black', width=3), showlegend=False))
+                
+    if show_plane_custom and not (h_val == 0 and k_val == 0 and l_val == 0):
+        plane_res = get_miller_plane_mesh(h_val, k_val, l_val)
+        if plane_res is not None:
+            px_m, py_m, pz_m, i_m, j_m, k_m = plane_res
+            fig_3d.add_trace(go.Mesh3d(
+                x=px_m, y=py_m, z=pz_m,
+                i=i_m, j=j_m, k=k_m,
+                color='crimson', opacity=0.5,
+                name=f'Plane ({h_val} {k_val} {l_val})',
+                showlegend=True
+            ))
+
+    if show_dir_custom and not (u_val == 0 and v_val == 0 and w_val == 0):
+        max_c = max(abs(u_val), abs(v_val), abs(w_val))
+        u_s, v_s, w_s = u_val / max_c, v_val / max_c, w_val / max_c
+        
+        fig_3d.add_trace(go.Scatter3d(
+            x=[0, u_s], y=[0, v_s], z=[0, w_s],
+            mode='lines+markers+text',
+            line=dict(color='gold', width=8),
+            marker=dict(size=8, color='darkorange', symbol='diamond'),
+            text=["(0,0,0)", f"  [{u_val} {v_val} {w_val}]"],
+            textposition="top right",
+            name=f'Direction [{u_val} {v_val} {w_val}]',
+            showlegend=True
+        ))
+
+    fig_3d.update_layout(scene=dict(aspectmode='data'), height=650)
+    st.plotly_chart(fig_3d, use_container_width=True)
+    
+    st.markdown("""
+    **Crystallographic Mechanics Breakdown**:
+    * **Miller Plane Notation $(h\,k\,l)$**: Represents reciprocal intercepts of a crystallographic plane with unit cell axes ($x, y, z$).
+    * **Miller Direction Notation $[u\,v\,w]$**: Represents a vector starting from origin $(0,0,0)$ through coordinates $(u, v, w)$.
+    * **FCC**: Primary close-packed slip plane is $\{111\}$ along $\langle110\rangle$ directions.
+    * **BCC**: Primary slip plane is $\{110\}$ along $\langle111\rangle$ directions.
+    """)
