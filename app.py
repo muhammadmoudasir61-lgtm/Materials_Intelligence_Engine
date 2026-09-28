@@ -1,4 +1,31 @@
 import streamlit as st
+from PIL import Image
+import os
+
+# Safe Image Loader Function (Prevents UnidentifiedImageError completely)
+def load_safe_image(img_path):
+    if os.path.exists(img_path):
+        try:
+            img = Image.open(img_path)
+            img.verify()  # Verify image integrity
+            return Image.open(img_path)  # Re-open after verify
+        except Exception:
+            return None
+    return None
+
+logo_path = "logo.png"
+logo_img = load_safe_image(logo_path)
+
+st.set_page_config(
+    page_title="Materials Intelligence Engine | Muhammad Mudassar",
+    page_icon=logo_img if logo_img is not None else "🔬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Sidebar Logo Display (Safely checks image validity)
+if logo_img is not None:
+    st.sidebar.image(logo_img, use_container_width=True)
 import numpy as np
 import pandas as pd
 import plotly.express as px
