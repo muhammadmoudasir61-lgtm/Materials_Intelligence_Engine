@@ -6,12 +6,10 @@ import plotly.graph_objects as go
 from PIL import Image
 import os
 from scipy.special import erf
-from scipy.ndimage import gaussian_filter
-from skimage.filters import threshold_otsu
-from skimage.measure import find_contours
+from scipy.ndimage import gaussian_filter, label
 
 # ==============================================================================
-# 1. PAGE CONFIGURATION & MODERN GLASSMORPHISM THEME
+# 1. PAGE CONFIGURATION & APP BRANDING
 # ==============================================================================
 logo_path = "logo.png"
 
@@ -119,9 +117,18 @@ st.title("🔬 Materials Intelligence Engine")
 st.caption("Developed by **Muhammad Mudassar** | Advanced Metallurgy & Materials Design Platform")
 st.divider()
 
-# ==============================================================================
-# HELPER FUNCTIONS FOR 3D CRYSTALLOGRAPHY
-# ==============================================================================
+# Native Pure NumPy Otsu Thresholding (Zero external dependencies)
+def numpy_otsu(gray_arr):
+    hist, bin_edges = np.histogram(gray_arr, bins=256, range=(0, 256))
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    weight1 = np.cumsum(hist)
+    weight2 = np.cumsum(hist[::-1])[::-1]
+    mean1 = np.cumsum(hist * bin_centers) / np.maximum(weight1, 1)
+    mean2 = (np.cumsum((hist * bin_centers)[::-1]) / np.maximum(weight2, 1))[::-1]
+    variance12 = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
+    idx = np.argmax(variance12)
+    return bin_centers[idx]
+
 def get_miller_plane_mesh(h, k, l):
     if h == 0 and k == 0 and l == 0:
         return None
@@ -132,26 +139,21 @@ def get_miller_plane_mesh(h, k, l):
             for y_e in [0.0, 1.0]:
                 for z_e in [0.0, 1.0]:
                     x = (c_val - k * y_e - l * z_e) / h
-                    if 0.0 <= x <= 1.0:
-                        pts.append((x, y_e, z_e))
+                    if 0.0 <= x <= 1.0: pts.append((x, y_e, z_e))
         if k != 0:
             for x_e in [0.0, 1.0]:
                 for z_e in [0.0, 1.0]:
                     y = (c_val - h * x_e - l * z_e) / k
-                    if 0.0 <= y <= 1.0:
-                        pts.append((x_e, y, z_e))
+                    if 0.0 <= y <= 1.0: pts.append((x_e, y, z_e))
         if l != 0:
             for x_e in [0.0, 1.0]:
                 for y_e in [0.0, 1.0]:
                     z = (c_val - h * x_e - k * y_e) / l
-                    if 0.0 <= z <= 1.0:
-                        pts.append((x_e, y_e, z))
-        
+                    if 0.0 <= z <= 1.0: pts.append((x_e, y, z))
         unique = []
         for p in pts:
             p_round = (round(p[0], 4), round(p[1], 4), round(p[2], 4))
-            if p_round not in unique:
-                unique.append(p_round)
+            if p_round not in unique: unique.append(p_round)
         return unique
 
     unique_pts = find_pts(1.0)
@@ -160,36 +162,29 @@ def get_miller_plane_mesh(h, k, l):
         c_alt = c_alt * 0.5 if c_alt > 0 else 0.5
         unique_pts = find_pts(c_alt)
         
-    if len(unique_pts) < 3:
-        return None
+    if len(unique_pts) < 3: return None
         
     pts = np.array(unique_pts)
     centroid = np.mean(pts, axis=0)
     normal = np.array([h, k, l], dtype=float)
     norm_val = np.linalg.norm(normal)
-    if norm_val == 0:
-        return None
+    if norm_val == 0: return None
     normal /= norm_val
-    
     v1 = pts[0] - centroid
-    if np.linalg.norm(v1) < 1e-5:
-        v1 = pts[1] - centroid
+    if np.linalg.norm(v1) < 1e-5: v1 = pts[1] - centroid
     v1 /= np.linalg.norm(v1)
     v2 = np.cross(normal, v1)
-    
     angles = [np.arctan2(np.dot(p - centroid, v2), np.dot(p - centroid, v1)) for p in pts]
     pts = pts[np.argsort(angles)]
     
     i_list, j_list, k_list = [], [], []
     for idx in range(1, len(pts) - 1):
-        i_list.append(0)
-        j_list.append(idx)
-        k_list.append(idx + 1)
+        i_list.append(0); j_list.append(idx); k_list.append(idx + 1)
         
     return pts[:, 0], pts[:, 1], pts[:, 2], i_list, j_list, k_list
 
 # ==============================================================================
-# MODULE 1: MICROSTRUCTURE ANALYSIS & HEAT TREATMENT ADVISORY
+# MODULE 1: MICROSTRUCTURE ANALYSIS
 # ==============================================================================
 if module_choice == CHOICE_M1:
     st.header("Module 1: Automated Microstructure Characterization & Heat Treatment Advisory")
@@ -209,6 +204,7 @@ if module_choice == CHOICE_M1:
         log_history("Microstructure Analysis", f"Analyzed uploaded image: {uploaded_file.name}")
     elif use_sample:
         sample_img = np.zeros((400, 400), dtype=np.uint8)
+        np.random.seed(42)
         for _ in range(35):
             cx, cy, r = np.random.randint(40, 360), np.random.randint(40, 360), np.random.randint(20, 50)
             y_grid, x_grid = np.ogrid[:400, :400]
@@ -219,20 +215,17 @@ if module_choice == CHOICE_M1:
     if img_rgb is not None:
         gray = np.dot(img_rgb[...,:3], [0.2989, 0.5870, 0.1140])
         blur = gaussian_filter(gray, sigma=1.5)
-        thresh_val = threshold_otsu(blur)
-        binary = blur < thresh_val
-        
-        contours = find_contours(binary, 0.5)
+        t_val = numpy_otsu(blur)
+        binary = blur < t_val
+        labeled_array, num_features = label(binary)
         
         with col1:
             st.image(img_rgb, caption="Original Input Micrograph", use_container_width=True)
         with col2:
-            fig_cont = px.imshow(img_rgb, title="Grain Boundary Segmentation Overlay")
-            for c in contours[::2]:
-                fig_cont.add_trace(go.Scatter(x=c[:, 1], y=c[:, 0], mode='lines', line=dict(color='lime', width=1.5), showlegend=False))
+            fig_cont = px.imshow(labeled_array, color_continuous_scale="Viridis", title="Grain Segmentation Heatmap")
             st.plotly_chart(fig_cont, use_container_width=True)
             
-        grain_count = max(len(contours), 10)
+        grain_count = max(num_features, 12)
         total_img_area_mm2 = (img_rgb.shape[0] * img_rgb.shape[1] * (microns_per_pixel ** 2)) / 1e6
         mean_area_um = (img_rgb.shape[0] * img_rgb.shape[1] * (microns_per_pixel ** 2)) / grain_count
         mean_ecd_um = 2 * np.sqrt(mean_area_um / np.pi)
@@ -311,23 +304,11 @@ elif module_choice == CHOICE_M2:
             'heat_treatment': 'Oil quench from 845°C. Temper at 540°C - 680°C for high fatigue strength.',
             'apps': 'Oilfield drill collars, aircraft engine mounts, heavy-duty hydraulic shafts.'
         },
-        'AISI 4340 (Ni-Cr-Mo High-Strength Steel)': {
-            'type': 'High-Strength Alloy Steel', 'density': 7.85, 'yield': 860, 'tensile': 1280, 'youngs': 210, 'elongation': 12, 'hardness': '38 HRC',
-            'mechanism': 'Deep hardenability through Nickel, Chromium, and Molybdenum additions yielding ultra-fine tempered Martensite.',
-            'heat_treatment': 'Oil quench from 830°C, double temper at 500°C for high fracture toughness.',
-            'apps': 'Aircraft landing gear, power transmission shafts, heavy military equipment.'
-        },
         'AISI 316L (Austenitic Stainless Steel)': {
             'type': 'Stainless Steel', 'density': 8.00, 'yield': 290, 'tensile': 580, 'youngs': 193, 'elongation': 50, 'hardness': '150 HB',
             'mechanism': 'Stable FCC Austenite phase stabilized by Nickel; Molybdenum resists pitting corrosion.',
             'heat_treatment': 'Solution anneal at 1040°C - 1120°C followed by rapid water quenching.',
             'apps': 'Chemical processing hardware, marine structures, medical implants, food grade equipment.'
-        },
-        'AISI 304 (General Purpose Stainless)': {
-            'type': 'Stainless Steel', 'density': 8.00, 'yield': 215, 'tensile': 505, 'youngs': 193, 'elongation': 70, 'hardness': '130 HB',
-            'mechanism': 'Austenitic 18/8 Chromium-Nickel matrix providing superior cold formability.',
-            'heat_treatment': 'Solution treat at 1010°C - 1120°C, rapid air/water cool.',
-            'apps': 'Kitchen sinks, architectural paneling, heat exchangers, chemical tanks.'
         },
         'Ti-6Al-4V (Grade 5 Titanium)': {
             'type': 'Titanium Alloy', 'density': 4.43, 'yield': 880, 'tensile': 950, 'youngs': 114, 'elongation': 14, 'hardness': '36 HRC',
@@ -340,12 +321,6 @@ elif module_choice == CHOICE_M2:
             'mechanism': 'Precipitation hardening via coherent Mg2Si (Mg-Si needle-like precipitates).',
             'heat_treatment': 'Solutionize at 530°C, water quench, artificial age at 160°C for 18 hours (T6 temper).',
             'apps': 'Bicycle frames, aircraft wings, structural architectural frameworks, automotive chassis.'
-        },
-        'Al 7075-T6 (Aerospace Super-Duralumin)': {
-            'type': 'High-Strength Aluminum Alloy', 'density': 2.81, 'yield': 503, 'tensile': 572, 'youngs': 71.7, 'elongation': 11, 'hardness': '150 HB',
-            'mechanism': 'Zinc-Magnesium-Copper precipitation hardening forming fine eta (MgZn2) phases.',
-            'heat_treatment': 'Solution treat at 480°C, quench, age at 120°C for 24 hours.',
-            'apps': 'Aircraft structural spars, military hardware, high-stress aerospace fittings.'
         },
         'Inconel 718 (Nickel Superalloy)': {
             'type': 'Nickel Superalloy', 'density': 8.19, 'yield': 1100, 'tensile': 1375, 'youngs': 205, 'elongation': 15, 'hardness': '40 HRC',
@@ -364,18 +339,6 @@ elif module_choice == CHOICE_M2:
             'mechanism': 'High volume of extremely hard Chromium carbides (Cr7C3) dispersed in Martensite.',
             'heat_treatment': 'Air quench from 1010°C, double temper at 200°C for maximum wear resistance.',
             'apps': 'Stamping dies, shear blades, blanking punches, thread rolling dies.'
-        },
-        'Nitinol (55-NiTi Shape Memory Alloy)': {
-            'type': 'Smart Shape Memory Alloy', 'density': 6.45, 'yield': 195, 'tensile': 890, 'youngs': 75, 'elongation': 15, 'hardness': '280 HB',
-            'mechanism': 'Reversible thermoelastic martensitic phase transformation (Austenite B19\' <-> Martenite B2).',
-            'heat_treatment': 'Shape setting heat treatment at 500°C for 30 minutes, rapid water quench.',
-            'apps': 'Self-expanding vascular stents, orthodontic archwires, aerospace actuators.'
-        },
-        'Magnesium AZ31B (Lightweight Structural Alloy)': {
-            'type': 'Magnesium Alloy', 'density': 1.78, 'yield': 220, 'tensile': 290, 'youngs': 45, 'elongation': 15, 'hardness': '73 HB',
-            'mechanism': 'Solute strengthening by Aluminum and Zinc in an ultra-lightweight HCP Magnesium matrix.',
-            'heat_treatment': 'Stress relief anneal at 150°C - 200°C or full anneal at 345°C.',
-            'apps': '3C electronics housings, lightweight aerospace enclosures, automotive steering wheels.'
         }
     }
     
@@ -421,7 +384,6 @@ elif module_choice == CHOICE_M2:
         st.caption("Calculate True Stress-Strain, Strain Hardening Exponent (n), and Modulus of Resilience.")
         
         col_c1, col_c2 = st.columns(2)
-        
         with col_c1:
             st.markdown("**Engineering Test Inputs:**")
             eng_stress = st.number_input("Engineering Stress (σ_eng in MPa):", min_value=1.0, value=350.0, step=10.0)
@@ -460,7 +422,6 @@ elif module_choice == CHOICE_M2:
         st.caption("Calculate Diffusion Coefficients (Arrhenius) and Carburizing Case Depth (Fick's 2nd Law).")
         
         col_k1, col_k2 = st.columns(2)
-        
         with col_k1:
             st.markdown("### 1. Arrhenius Equation Solver ($D = D_0 \cdot e^{-Q / RT}$)")
             D0 = st.number_input("Frequency Factor (D₀ in m²/s):", min_value=1e-7, value=2.3e-5, format="%.2e")
@@ -490,21 +451,19 @@ elif module_choice == CHOICE_M2:
             st.plotly_chart(fig_diff, use_container_width=True)
 
 # ==============================================================================
-# MODULE 3: INTERACTIVE 3D CRYSTAL LATTICE, PLANES & DIRECTIONS ENGINE
+# MODULE 3: 3D CRYSTAL LATTICE, PLANES & DIRECTIONS
 # ==============================================================================
 elif module_choice == CHOICE_M3:
     st.header("Module 3: Dynamic 3D Crystal Lattice, Planes & Directions Engine")
     st.caption("Interactive 3D visualization of unit cell structures, custom Miller Planes (h k l), and Miller Directions [u v w].")
     
     col_config1, col_config2 = st.columns([1, 1])
-    
     with col_config1:
         lattice_type = st.selectbox("Select Crystal Structure:", ["FCC (Face-Centered Cubic)", "BCC (Body-Centered Cubic)", "HCP (Hexagonal Close-Packed)"])
         dislocation_shift = st.slider("Apply Shear Strain (Animate Dislocation Glide):", 0.0, 0.5, 0.0, 0.05)
 
     st.subheader("📐 Crystallographic Planes & Directions Controls")
     col_p, col_d = st.columns(2)
-    
     with col_p:
         st.markdown("**Miller Plane Indices $(h\,k\,l)$**")
         show_plane_custom = st.checkbox("Show Custom Miller Plane", value=True)
@@ -538,7 +497,7 @@ elif module_choice == CHOICE_M3:
                     atoms.append([x + (z * dislocation_shift if z == 1 else 0), y, z, 'Corner Site'])
         atoms.append([0.5 + 0.5 * dislocation_shift, 0.5, 0.5, 'Body-Center Site'])
         
-    else:  # HCP
+    else:
         for z in [0, 1]:
             atoms.append([0, 0, z, 'Hex-Center Site'])
             for angle in np.linspace(0, 2*np.pi, 7)[:-1]:
